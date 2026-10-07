@@ -77,17 +77,45 @@
   // The web app link from Apps Script (Deploy > Manage deployments). Must end in /exec.
   var API_URL = 'https://script.google.com/macros/s/AKfycbzTyXDJZaKhGlcyrsqeSMhtTEAwvYBnDBwWQbudtjrpVRkum5cvw0nvoiu7ApRlsbCB/exec';
 
-  var TESTS = {
-    Strength: { detail: 'lifts', detailLabel: 'Lift', fields: [
-      { k: 'weight', label: 'Weight lb', min: 20, max: 1000 },
-      { k: 'reps', label: 'Reps', min: 1, max: 20, whole: true } ] },
-    Speed: { detail: 'sprints', detailLabel: 'Distance', fields: [
-      { k: 'result', label: 'Time s', min: 0.5, max: 15 } ] },
-    Vertical: { fields: [ { k: 'result', label: 'Inches', min: 5, max: 50 } ] },
-    Broad: { fields: [ { k: 'result', label: 'Inches', min: 30, max: 150 } ] },
-    RSI: { fields: [ { k: 'result', label: 'RSI', min: 0.2, max: 5 } ] },
-    IMTP: { fields: [ { k: 'result', label: 'Peak N', min: 500, max: 9000 } ] }
-  };
+  // Three kinds of test. The second dropdown picks the exact one, and that decides the boxes.
+  var TEST_NAMES = ['Strength', 'Speed', 'Jump'];
+  var PULL = 'Isometric Midthigh Pull';
+  var JUMPS = ['Vertical Jump', 'Broad Jump', 'Triple Jump', 'RSI'];
+  var DETAIL_LABEL = { Strength: 'Exercise', Speed: 'Distance', Jump: 'Jump' };
+
+  function detailsFor(test) {
+    if (test === 'Strength') return app.lifts.filter(function (l) { return l !== PULL; }).concat([PULL]);
+    if (test === 'Speed') return app.sprints;
+    if (test === 'Jump') return JUMPS;
+    return [];
+  }
+
+  function feetInches(minFt, maxFt) {
+    return [
+      { k: 'ft', label: 'Feet', min: minFt, max: maxFt, whole: true },
+      { k: 'inch', label: 'Inches', min: 0, max: 11.9, optional: true } ];
+  }
+
+  function fieldsFor(test, detail) {
+    if (!test || !detail) return [];
+    if (test === 'Strength') {
+      if (detail === PULL) return [ { k: 'result', label: 'Peak lb', min: 100, max: 1500 } ];
+      return [ { k: 'weight', label: 'Weight lb', min: 20, max: 1000 },
+               { k: 'reps', label: 'Reps', min: 1, max: 20, whole: true } ];
+    }
+    if (test === 'Speed') return [ { k: 'result', label: 'Time s', min: 0.5, max: 15 } ];
+    if (detail === 'Vertical Jump') return [ { k: 'result', label: 'Inches', min: 5, max: 50 } ];
+    if (detail === 'Broad Jump') return feetInches(3, 12);
+    if (detail === 'Triple Jump') return feetInches(10, 40);
+    if (detail === 'RSI') return [ { k: 'result', label: 'RSI', min: 0.2, max: 5 } ];
+    return [];
+  }
+
+  function curTest() {
+    var test = $('test').value;
+    if (!test) return null;
+    return { detailLabel: DETAIL_LABEL[test], details: detailsFor(test), fields: fieldsFor(test, $('detail').value) };
+  }
 
   var app = null;      // lists and roster from the sheet
   var today = [];      // [{id, name, vals: {}}] athletes on screen
@@ -153,7 +181,7 @@
     var cur = { coach: $('coach').value, group: $('group').value, test: $('test').value, detail: $('detail').value };
     fill($('coach'), app.coaches, cur.coach);
     fillGroups(cur.group);
-    fill($('test'), Object.keys(TESTS), cur.test);
+    fill($('test'), TEST_NAMES, cur.test);
     onTestChange(true, cur.detail);
     loadGroup();
     $('submit').disabled = false;
@@ -170,11 +198,11 @@
   }
 
   function onTestChange(first, keepDetail) {
-    var t = TESTS[$('test').value];
-    if (t && t.detail) {
+    var t = curTest();
+    if (t) {
       $('detailWrap').style.visibility = 'visible';
       $('detailLabel').textContent = t.detailLabel;
-      fill($('detail'), app[t.detail], keepDetail);
+      fill($('detail'), t.details, keepDetail);
     } else {
       $('detailWrap').style.visibility = 'hidden';
       fill($('detail'), [], '');
@@ -184,7 +212,7 @@
   }
 
   function render() {
-    var t = TESTS[$('test').value] || { fields: [] };
+    var t = curTest() || { fields: [] };
     var heads = $('heads');
     heads.innerHTML = '<span class="sp"></span>';
     t.fields.forEach(function (f) {
@@ -260,19 +288,19 @@
   function submit() {
     if (busy) return;
     status('', '');
-    var t = TESTS[$('test').value];
+    var t = curTest();
     var missing = [];
     if (!$('coach').value) missing.push('coach');
     if (!$('group').value) missing.push('time');
     if (!t) missing.push('test');
-    else if (t.detail && !$('detail').value) missing.push(t.detailLabel.toLowerCase());
+    else if (!$('detail').value) missing.push(t.detailLabel.toLowerCase());
     var when = null;
     if ($('when').value === 'earlier') {
       if (!$('wdate').value) missing.push('session date');
       if (!$('wtime').value) missing.push('session time');
       when = { date: $('wdate').value, time: $('wtime').value.slice(0, 5) };
     }
-    if (missing.length) { status('warn', 'Pick a ' + missing.join(', ') + ' first.'); return; }
+    if (missing.length) { status('warn', 'Still needed: ' + missing.join(', ') + '.'); return; }
     if (when && when.date > localDay()) { status('warn', 'The session date is in the future. Check the date.'); return; }
     var entries = [], errors = 0, odd = 0;
 
@@ -282,22 +310,27 @@
       var entry = { id: a.id, name: a.name };
       t.fields.forEach(function (f) {
         var raw = a.vals[f.k];
+        if (f.optional && (raw === undefined || raw === '')) raw = '0';
         var v = Number(raw);
-        if (raw === undefined || raw === '' || isNaN(v) || v <= 0 || (f.whole && v % 1 !== 0)) {
+        if (raw === undefined || raw === '' || isNaN(v) || v < 0 || (v === 0 && !f.optional) || (f.whole && v % 1 !== 0)) {
           errors++; mark(i, f.k, 'err'); return;
         }
         if (v < f.min || v > f.max) { odd++; mark(i, f.k, 'bad'); }
         entry[f.k] = v;
       });
+      if (entry.ft !== undefined) {                     // feet + inches are saved as total inches
+        entry.result = Math.round((entry.ft * 12 + (entry.inch || 0)) * 10) / 10;
+        delete entry.ft; delete entry.inch;
+      }
       entries.push(entry);
     });
 
-    if (errors) { status('fail', 'Fix the red boxes: each athlete needs every box filled with a number.'); return; }
+    if (errors) { status('fail', 'Fix the red boxes: each athlete needs a number in every box (inches can be left blank for 0).'); return; }
     if (!entries.length) { status('warn', 'Nothing entered yet.'); return; }
 
     var payload = {
       coach: $('coach').value, group: $('group').value, test: $('test').value,
-      detail: t.detail ? $('detail').value : '', when: when, entries: entries
+      detail: $('detail').value, when: when, entries: entries
     };
     if (odd) {
       ask(odd + (odd === 1 ? ' value looks' : ' values look') + ' unusual (highlighted). Check for typos.', 'Save anyway',
@@ -354,7 +387,11 @@
   $('coach').addEventListener('change', function () { status('', ''); fillGroups(); loadGroup(); });
   $('group').addEventListener('change', function () { status('', ''); loadGroup(); });
   $('test').addEventListener('change', function () { status('', ''); onTestChange(false); });
-  $('detail').addEventListener('change', function () { status('', ''); });
+  $('detail').addEventListener('change', function () {
+    status('', '');
+    today.forEach(function (a) { a.vals = {}; });
+    render();
+  });
   function localDay() {
     var d = new Date();
     return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
