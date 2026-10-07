@@ -93,11 +93,11 @@
   function remember(key, value) { try { localStorage.setItem('te_' + key, value); } catch (e) {} }
   function recall(key) { try { return localStorage.getItem('te_' + key); } catch (e) { return null; } }
 
-  function fill(select, items, saved) {
+  function fill(select, items, saved, labelOf) {
     select.innerHTML = '';
     items.forEach(function (v) {
       var o = document.createElement('option');
-      o.value = v; o.textContent = v;
+      o.value = v; o.textContent = labelOf ? labelOf(v) : v;
       select.appendChild(o);
     });
     if (saved && items.indexOf(saved) !== -1) select.value = saved;
@@ -119,10 +119,29 @@
   }
   function closeAsk() { $('ask').style.display = 'none'; $('submit').style.display = 'block'; }
 
+  // A group named "Shad - 6:30a M/W" belongs to coach Shad. Groups with no coach
+  // name in front are shared and show for everyone.
+  function ownerOf(group) {
+    var g = group.toLowerCase(), found = '';
+    app.coaches.forEach(function (c) {
+      if (g.indexOf(c.toLowerCase() + ' - ') === 0 && c.length > found.length) found = c;
+    });
+    return found;
+  }
+
+  function fillGroups() {
+    var coach = $('coach').value;
+    var mine = app.groups.filter(function (g) { var o = ownerOf(g); return o === '' || o === coach; });
+    if (!mine.length) mine = app.groups;
+    fill($('group'), mine, recall('group_' + coach), function (g) {
+      return ownerOf(g) === coach ? g.slice(coach.length + 3) : g;
+    });
+  }
+
   function init(data) {
     app = data;
     fill($('coach'), app.coaches, recall('coach'));
-    fill($('group'), app.groups, recall('group'));
+    fillGroups();
     fill($('test'), Object.keys(TESTS), recall('test'));
     onTestChange(true);
     loadGroup();
@@ -306,8 +325,8 @@
     });
   }
 
-  $('coach').addEventListener('change', function () { remember('coach', this.value); });
-  $('group').addEventListener('change', function () { remember('group', this.value); loadGroup(); });
+  $('coach').addEventListener('change', function () { remember('coach', this.value); fillGroups(); loadGroup(); });
+  $('group').addEventListener('change', function () { remember('group_' + $('coach').value, this.value); loadGroup(); });
   $('test').addEventListener('change', function () { remember('test', this.value); status('', ''); onTestChange(false); });
   $('detail').addEventListener('change', function () { remember('detail_' + $('test').value, this.value); });
   $('search').addEventListener('input', onSearch);
