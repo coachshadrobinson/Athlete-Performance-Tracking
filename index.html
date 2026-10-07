@@ -44,7 +44,7 @@
 <div class="card">
   <div class="grid">
     <div><label for="coach">Coach</label><select id="coach"></select></div>
-    <div><label for="group">Group</label><select id="group"></select></div>
+    <div><label for="group">Time</label><select id="group"></select></div>
     <div><label for="test">Test</label><select id="test"></select></div>
     <div id="detailWrap"><label for="detail" id="detailLabel">Lift</label><select id="detail"></select></div>
   </div>
@@ -95,12 +95,15 @@
 
   function fill(select, items, saved, labelOf) {
     select.innerHTML = '';
+    var blank = document.createElement('option');
+    blank.value = ''; blank.textContent = 'Select…';
+    select.appendChild(blank);
     items.forEach(function (v) {
       var o = document.createElement('option');
       o.value = v; o.textContent = labelOf ? labelOf(v) : v;
       select.appendChild(o);
     });
-    if (saved && items.indexOf(saved) !== -1) select.value = saved;
+    select.value = (saved && items.indexOf(saved) !== -1) ? saved : '';
   }
 
   function status(kind, msg) {
@@ -129,21 +132,25 @@
     return found;
   }
 
-  function fillGroups() {
+  function fillGroups(keep) {
     var coach = $('coach').value;
+    $('group').disabled = !coach;
+    if (!coach) { fill($('group'), [], ''); return; }
     var mine = app.groups.filter(function (g) { var o = ownerOf(g); return o === '' || o === coach; });
     if (!mine.length) mine = app.groups;
-    fill($('group'), mine, recall('group_' + coach), function (g) {
+    fill($('group'), mine, keep, function (g) {
       return ownerOf(g) === coach ? g.slice(coach.length + 3) : g;
     });
   }
 
   function init(data) {
     app = data;
-    fill($('coach'), app.coaches, recall('coach'));
-    fillGroups();
-    fill($('test'), Object.keys(TESTS), recall('test'));
-    onTestChange(true);
+    // Everything starts blank; a refresh of the roster keeps whatever is already picked.
+    var cur = { coach: $('coach').value, group: $('group').value, test: $('test').value, detail: $('detail').value };
+    fill($('coach'), app.coaches, cur.coach);
+    fillGroups(cur.group);
+    fill($('test'), Object.keys(TESTS), cur.test);
+    onTestChange(true, cur.detail);
     loadGroup();
     $('submit').disabled = false;
   }
@@ -153,26 +160,27 @@
     var kept = {};
     today.forEach(function (a) { kept[a.id] = a.vals; });
     today = app.roster
-      .filter(function (a) { return a.group === g; })
+      .filter(function (a) { return g !== '' && a.group === g; })
       .map(function (a) { return { id: a.id, name: a.name, vals: kept[a.id] || {} }; });
     render();
   }
 
-  function onTestChange(first) {
+  function onTestChange(first, keepDetail) {
     var t = TESTS[$('test').value];
-    if (t.detail) {
+    if (t && t.detail) {
       $('detailWrap').style.visibility = 'visible';
       $('detailLabel').textContent = t.detailLabel;
-      fill($('detail'), app[t.detail], recall('detail_' + $('test').value));
+      fill($('detail'), app[t.detail], keepDetail);
     } else {
       $('detailWrap').style.visibility = 'hidden';
+      fill($('detail'), [], '');
     }
     if (!first) today.forEach(function (a) { a.vals = {}; });
     render();
   }
 
   function render() {
-    var t = TESTS[$('test').value];
+    var t = TESTS[$('test').value] || { fields: [] };
     var heads = $('heads');
     heads.innerHTML = '<span class="sp"></span>';
     t.fields.forEach(function (f) {
@@ -184,7 +192,7 @@
     if (!today.length) {
       var e = document.createElement('div');
       e.className = 'empty';
-      e.textContent = 'No athletes yet. Pick a group or search a name above.';
+      e.textContent = $('group').value ? 'No regulars in this group yet. Search a name above to add one.' : 'Pick a coach and a time to load athletes.';
       list.appendChild(e);
       return;
     }
@@ -249,6 +257,12 @@
     if (busy) return;
     status('', '');
     var t = TESTS[$('test').value];
+    var missing = [];
+    if (!$('coach').value) missing.push('coach');
+    if (!$('group').value) missing.push('time');
+    if (!t) missing.push('test');
+    else if (t.detail && !$('detail').value) missing.push(t.detailLabel.toLowerCase());
+    if (missing.length) { status('warn', 'Pick a ' + missing.join(', ') + ' first.'); return; }
     var entries = [], errors = 0, odd = 0;
 
     today.forEach(function (a, i) {
@@ -325,10 +339,10 @@
     });
   }
 
-  $('coach').addEventListener('change', function () { remember('coach', this.value); fillGroups(); loadGroup(); });
-  $('group').addEventListener('change', function () { remember('group_' + $('coach').value, this.value); loadGroup(); });
-  $('test').addEventListener('change', function () { remember('test', this.value); status('', ''); onTestChange(false); });
-  $('detail').addEventListener('change', function () { remember('detail_' + $('test').value, this.value); });
+  $('coach').addEventListener('change', function () { status('', ''); fillGroups(); loadGroup(); });
+  $('group').addEventListener('change', function () { status('', ''); loadGroup(); });
+  $('test').addEventListener('change', function () { status('', ''); onTestChange(false); });
+  $('detail').addEventListener('change', function () { status('', ''); });
   $('search').addEventListener('input', onSearch);
   $('submit').addEventListener('click', submit);
 
