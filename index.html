@@ -13,6 +13,8 @@
   label { display: block; font-size: 12px; color: #555; margin-bottom: 2px; }
   select, input { width: 100%; font-size: 16px; padding: 10px; border: 1px solid #c5c9d0; border-radius: 8px; background: #fff; }
   #results { margin-top: 6px; }
+  .whenBox { display: none; }
+  .earlier .whenBox { display: block; }
   .hit { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 16px; }
   .hit:active { background: #eef2ff; }
   .row { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid #eee; }
@@ -47,6 +49,10 @@
     <div><label for="group">Time</label><select id="group"></select></div>
     <div><label for="test">Test</label><select id="test"></select></div>
     <div id="detailWrap"><label for="detail" id="detailLabel">Lift</label><select id="detail"></select></div>
+    <div><label for="when">When was the session?</label><select id="when"><option value="now">Right now</option><option value="earlier">Earlier (pick date and time)</option></select></div>
+    <div></div>
+    <div class="whenBox"><label for="wdate">Session date</label><input id="wdate" type="date"></div>
+    <div class="whenBox"><label for="wtime">Session time</label><input id="wtime" type="time"></div>
   </div>
 </div>
 
@@ -262,7 +268,14 @@
     if (!$('group').value) missing.push('time');
     if (!t) missing.push('test');
     else if (t.detail && !$('detail').value) missing.push(t.detailLabel.toLowerCase());
+    var when = null;
+    if ($('when').value === 'earlier') {
+      if (!$('wdate').value) missing.push('session date');
+      if (!$('wtime').value) missing.push('session time');
+      when = { date: $('wdate').value, time: $('wtime').value.slice(0, 5) };
+    }
     if (missing.length) { status('warn', 'Pick a ' + missing.join(', ') + ' first.'); return; }
+    if (when && when.date > localDay()) { status('warn', 'The session date is in the future. Check the date.'); return; }
     var entries = [], errors = 0, odd = 0;
 
     today.forEach(function (a, i) {
@@ -286,7 +299,7 @@
 
     var payload = {
       coach: $('coach').value, group: $('group').value, test: $('test').value,
-      detail: t.detail ? $('detail').value : '', entries: entries
+      detail: t.detail ? $('detail').value : '', when: when, entries: entries
     };
     if (odd) {
       ask(odd + (odd === 1 ? ' value looks' : ' values look') + ' unusual (highlighted). Check for typos.', 'Save anyway',
@@ -325,13 +338,14 @@
       done();
       if (res && res.duplicates) {
         var names = res.duplicates.map(function (d) { return d.name + ' (by ' + d.coach + ')'; }).join(', ');
-        ask('Already entered today for this test: ' + names + '.', 'Save again',
+        ask('Already entered for this test on that day: ' + names + '.', 'Save again',
           function () { send(payload, true); });
         return;
       }
       today.forEach(function (a) { a.vals = {}; });
       render();
-      status('ok', res.saved + ' saved ✓  ' + payload.test + (payload.detail ? ' · ' + payload.detail : ''));
+      status('ok', res.saved + ' saved ✓  ' + payload.test + (payload.detail ? ' · ' + payload.detail : '') +
+        (payload.when ? ' · session ' + payload.when.date + ' ' + payload.when.time : ''));
     }, function (err) {
       done();
       status('fail', 'NOT saved. Your numbers are still here. Check your connection and tap Submit again. (' +
@@ -343,6 +357,15 @@
   $('group').addEventListener('change', function () { status('', ''); loadGroup(); });
   $('test').addEventListener('change', function () { status('', ''); onTestChange(false); });
   $('detail').addEventListener('change', function () { status('', ''); });
+  function localDay() {
+    var d = new Date();
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+  }
+  $('when').addEventListener('change', function () {
+    status('', '');
+    document.body.classList.toggle('earlier', this.value === 'earlier');
+    $('wdate').max = localDay();
+  });
   $('search').addEventListener('input', onSearch);
   $('submit').addEventListener('click', submit);
 
