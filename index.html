@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testing Entry</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, system-ui, Roboto, Arial, sans-serif; background: #f4f5f7; color: #1c1e21; padding-bottom: 96px; }
+  header { background: #1f2937; color: #fff; padding: 12px 16px; font-size: 18px; font-weight: 600; }
+  .card { background: #fff; margin: 10px; padding: 12px; border-radius: 10px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  label { display: block; font-size: 12px; color: #555; margin-bottom: 2px; }
+  select, input { width: 100%; font-size: 16px; padding: 10px; border: 1px solid #c5c9d0; border-radius: 8px; background: #fff; }
+  #results { margin-top: 6px; }
+  .hit { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 16px; }
+  .hit:active { background: #eef2ff; }
+  .row { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid #eee; }
+  .row .name { flex: 1 1 auto; font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row input { flex: 0 0 78px; width: 78px; padding: 10px 6px; text-align: center; }
+  .row input.bad { border-color: #d97706; background: #fff7ed; }
+  .row input.err { border-color: #dc2626; background: #fef2f2; }
+  .row button { flex: 0 0 36px; height: 40px; border: 0; background: none; font-size: 20px; color: #888; }
+  .heads { display: flex; gap: 6px; font-size: 11px; color: #666; padding-right: 42px; }
+  .heads span { flex: 0 0 78px; text-align: center; }
+  .heads .sp { flex: 1 1 auto; }
+  .empty { color: #777; font-size: 14px; padding: 8px 0; }
+  footer { position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1px solid #ddd; padding: 10px; }
+  #submit { width: 100%; font-size: 18px; font-weight: 600; padding: 14px; border: 0; border-radius: 10px; background: #2563eb; color: #fff; }
+  #submit:disabled { background: #9ca3af; }
+  #status { font-size: 14px; margin-bottom: 8px; display: none; padding: 8px 10px; border-radius: 8px; }
+  #status.ok { display: block; background: #dcfce7; color: #166534; }
+  #status.warn { display: block; background: #fef3c7; color: #92400e; }
+  #status.fail { display: block; background: #fee2e2; color: #991b1b; }
+  #ask { display: none; margin-bottom: 8px; padding: 10px; border-radius: 8px; background: #fef3c7; color: #92400e; font-size: 14px; }
+  #ask .btns { display: flex; gap: 8px; margin-top: 8px; }
+  #ask button { flex: 1; font-size: 16px; padding: 10px; border-radius: 8px; border: 1px solid #92400e; background: #fff; color: #92400e; }
+  #ask button.yes { background: #92400e; color: #fff; }
+</style>
+</head>
+<body>
+<header>Testing Entry</header>
+
+<div class="card">
+  <div class="grid">
+    <div><label for="coach">Coach</label><select id="coach"></select></div>
+    <div><label for="group">Group</label><select id="group"></select></div>
+    <div><label for="test">Test</label><select id="test"></select></div>
+    <div id="detailWrap"><label for="detail" id="detailLabel">Lift</label><select id="detail"></select></div>
+  </div>
+</div>
+
+<div class="card">
+  <label for="search">Add an athlete from any group</label>
+  <input id="search" type="search" placeholder="Type a few letters of a name" autocomplete="off">
+  <div id="results"></div>
+</div>
+
+<div class="card">
+  <div class="heads" id="heads"></div>
+  <div id="list"><div class="empty">Loading…</div></div>
+</div>
+
+<footer>
+  <div id="status"></div>
+  <div id="ask"><div id="askMsg"></div><div class="btns"><button id="askNo">Cancel</button><button id="askYes" class="yes">Save anyway</button></div></div>
+  <button id="submit" disabled>Submit</button>
+</footer>
+
+<script>
+  // The web app link from Apps Script (Deploy > Manage deployments). Must end in /exec.
+  var API_URL = 'https://script.google.com/macros/s/AKfycbzTyXDJZaKhGlcyrsqeSMhtTEAwvYBnDBwWQbudtjrpVRkum5cvw0nvoiu7ApRlsbCB/exec';
+
+  var TESTS = {
+    Strength: { detail: 'lifts', detailLabel: 'Lift', fields: [
+      { k: 'weight', label: 'Weight lb', min: 20, max: 1000 },
+      { k: 'reps', label: 'Reps', min: 1, max: 20, whole: true } ] },
+    Speed: { detail: 'sprints', detailLabel: 'Distance', fields: [
+      { k: 'result', label: 'Time s', min: 0.5, max: 15 } ] },
+    Vertical: { fields: [ { k: 'result', label: 'Inches', min: 5, max: 50 } ] },
+    Broad: { fields: [ { k: 'result', label: 'Inches', min: 30, max: 150 } ] },
+    RSI: { fields: [
+      { k: 'result', label: 'Jump in', min: 2, max: 40 },
+      { k: 'contact', label: 'Contact s', min: 0.08, max: 1.5 } ] },
+    IMTP: { fields: [ { k: 'result', label: 'Peak N', min: 500, max: 9000 } ] }
+  };
+
+  var app = null;      // lists and roster from the sheet
+  var today = [];      // [{id, name, vals: {}}] athletes on screen
+  var busy = false;
+  var $ = function (id) { return document.getElementById(id); };
+
+  function remember(key, value) { try { localStorage.setItem('te_' + key, value); } catch (e) {} }
+  function recall(key) { try { return localStorage.getItem('te_' + key); } catch (e) { return null; } }
+
+  function fill(select, items, saved) {
+    select.innerHTML = '';
+    items.forEach(function (v) {
+      var o = document.createElement('option');
+      o.value = v; o.textContent = v;
+      select.appendChild(o);
+    });
+    if (saved && items.indexOf(saved) !== -1) select.value = saved;
+  }
+
+  function status(kind, msg) {
+    var s = $('status');
+    s.className = kind || '';
+    s.textContent = msg || '';
+  }
+
+  function ask(msg, yesText, onYes) {
+    $('askMsg').textContent = msg;
+    $('askYes').textContent = yesText;
+    $('ask').style.display = 'block';
+    $('submit').style.display = 'none';
+    $('askYes').onclick = function () { closeAsk(); onYes(); };
+    $('askNo').onclick = function () { closeAsk(); };
+  }
+  function closeAsk() { $('ask').style.display = 'none'; $('submit').style.display = 'block'; }
+
+  function init(data) {
+    app = data;
+    fill($('coach'), app.coaches, recall('coach'));
+    fill($('group'), app.groups, recall('group'));
+    fill($('test'), Object.keys(TESTS), recall('test'));
+    onTestChange(true);
+    loadGroup();
+    $('submit').disabled = false;
+  }
+
+  function loadGroup() {
+    var g = $('group').value;
+    var kept = {};
+    today.forEach(function (a) { kept[a.id] = a.vals; });
+    today = app.roster
+      .filter(function (a) { return a.group === g; })
+      .map(function (a) { return { id: a.id, name: a.name, vals: kept[a.id] || {} }; });
+    render();
+  }
+
+  function onTestChange(first) {
+    var t = TESTS[$('test').value];
+    if (t.detail) {
+      $('detailWrap').style.visibility = 'visible';
+      $('detailLabel').textContent = t.detailLabel;
+      fill($('detail'), app[t.detail], recall('detail_' + $('test').value));
+    } else {
+      $('detailWrap').style.visibility = 'hidden';
+    }
+    if (!first) today.forEach(function (a) { a.vals = {}; });
+    render();
+  }
+
+  function render() {
+    var t = TESTS[$('test').value];
+    var heads = $('heads');
+    heads.innerHTML = '<span class="sp"></span>';
+    t.fields.forEach(function (f) {
+      var s = document.createElement('span'); s.textContent = f.label; heads.appendChild(s);
+    });
+
+    var list = $('list');
+    list.innerHTML = '';
+    if (!today.length) {
+      var e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = 'No athletes yet. Pick a group or search a name above.';
+      list.appendChild(e);
+      return;
+    }
+    today.forEach(function (a, i) {
+      var row = document.createElement('div'); row.className = 'row';
+      var n = document.createElement('div'); n.className = 'name'; n.textContent = a.name;
+      row.appendChild(n);
+      t.fields.forEach(function (f) {
+        var inp = document.createElement('input');
+        inp.type = 'text';
+        inp.inputMode = f.whole ? 'numeric' : 'decimal';
+        inp.value = a.vals[f.k] === undefined ? '' : a.vals[f.k];
+        inp.setAttribute('aria-label', a.name + ' ' + f.label);
+        inp.dataset.i = i; inp.dataset.k = f.k;
+        inp.addEventListener('input', function () {
+          a.vals[f.k] = inp.value.trim();
+          inp.classList.remove('bad'); inp.classList.remove('err');
+        });
+        row.appendChild(inp);
+      });
+      var x = document.createElement('button');
+      x.textContent = '×'; x.setAttribute('aria-label', 'Remove ' + a.name);
+      x.addEventListener('click', function () { today.splice(i, 1); render(); });
+      row.appendChild(x);
+      list.appendChild(row);
+    });
+  }
+
+  function onSearch() {
+    var q = $('search').value.trim().toLowerCase();
+    var box = $('results');
+    box.innerHTML = '';
+    if (q.length < 2) return;
+    var have = {};
+    today.forEach(function (a) { have[a.id] = true; });
+    app.roster
+      .filter(function (a) { return !have[a.id] && a.name.toLowerCase().indexOf(q) !== -1; })
+      .slice(0, 8)
+      .forEach(function (a) {
+        var d = document.createElement('div'); d.className = 'hit';
+        d.textContent = a.name + (a.group ? '  ·  ' + a.group : '');
+        d.addEventListener('click', function () {
+          today.push({ id: a.id, name: a.name, vals: {} });
+          $('search').value = ''; box.innerHTML = '';
+          render();
+        });
+        box.appendChild(d);
+      });
+    if (!box.children.length) {
+      var none = document.createElement('div'); none.className = 'empty';
+      none.textContent = 'No match. New athletes are added in the Roster tab of the sheet.';
+      box.appendChild(none);
+    }
+  }
+
+  function mark(i, k, cls) {
+    var el = document.querySelector('input[data-i="' + i + '"][data-k="' + k + '"]');
+    if (el) el.classList.add(cls);
+  }
+
+  function submit() {
+    if (busy) return;
+    status('', '');
+    var t = TESTS[$('test').value];
+    var entries = [], errors = 0, odd = 0;
+
+    today.forEach(function (a, i) {
+      var filled = t.fields.filter(function (f) { return a.vals[f.k] !== undefined && a.vals[f.k] !== ''; });
+      if (!filled.length) return;                       // blank row = absent, skip it
+      var entry = { id: a.id, name: a.name };
+      t.fields.forEach(function (f) {
+        var raw = a.vals[f.k];
+        var v = Number(raw);
+        if (raw === undefined || raw === '' || isNaN(v) || v <= 0 || (f.whole && v % 1 !== 0)) {
+          errors++; mark(i, f.k, 'err'); return;
+        }
+        if (v < f.min || v > f.max) { odd++; mark(i, f.k, 'bad'); }
+        entry[f.k] = v;
+      });
+      entries.push(entry);
+    });
+
+    if (errors) { status('fail', 'Fix the red boxes: each athlete needs every box filled with a number.'); return; }
+    if (!entries.length) { status('warn', 'Nothing entered yet.'); return; }
+
+    var payload = {
+      coach: $('coach').value, group: $('group').value, test: $('test').value,
+      detail: t.detail ? $('detail').value : '', entries: entries
+    };
+    if (odd) {
+      ask(odd + (odd === 1 ? ' value looks' : ' values look') + ' unusual (highlighted). Check for typos.', 'Save anyway',
+        function () { send(payload, false); });
+    } else {
+      send(payload, false);
+    }
+  }
+
+  // Talks to the sheet. No body = load the lists; with a body = save results.
+  function callApi(body) {
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, 30000);
+    var opts = { redirect: 'follow', signal: ctl.signal };
+    if (body) { opts.method = 'POST'; opts.body = JSON.stringify(body); }
+    return fetch(API_URL, opts).then(function (r) {
+      clearTimeout(timer);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }, function (e) {
+      clearTimeout(timer);
+      throw new Error(e && e.name === 'AbortError' ? 'timed out' : 'no connection');
+    }).then(function (d) {
+      if (d && d.error) throw new Error(d.error);
+      return d;
+    });
+  }
+
+  function send(payload, force) {
+    busy = true;
+    $('submit').disabled = true;
+    $('submit').textContent = 'Saving…';
+    var done = function () { busy = false; $('submit').disabled = false; $('submit').textContent = 'Submit'; };
+
+    callApi({ action: 'save', payload: payload, force: !!force }).then(function (res) {
+      done();
+      if (res && res.duplicates) {
+        var names = res.duplicates.map(function (d) { return d.name + ' (by ' + d.coach + ')'; }).join(', ');
+        ask('Already entered today for this test: ' + names + '.', 'Save again',
+          function () { send(payload, true); });
+        return;
+      }
+      today.forEach(function (a) { a.vals = {}; });
+      render();
+      status('ok', res.saved + ' saved ✓  ' + payload.test + (payload.detail ? ' · ' + payload.detail : ''));
+    }, function (err) {
+      done();
+      status('fail', 'NOT saved. Your numbers are still here. Check your connection and tap Submit again. (' +
+        (err && err.message ? err.message : 'no response') + ')');
+    });
+  }
+
+  $('coach').addEventListener('change', function () { remember('coach', this.value); });
+  $('group').addEventListener('change', function () { remember('group', this.value); loadGroup(); });
+  $('test').addEventListener('change', function () { remember('test', this.value); status('', ''); onTestChange(false); });
+  $('detail').addEventListener('change', function () { remember('detail_' + $('test').value, this.value); });
+  $('search').addEventListener('input', onSearch);
+  $('submit').addEventListener('click', submit);
+
+  // Show the roster saved on this device straight away, then refresh it from the sheet.
+  var cached = recall('appdata');
+  if (cached) { try { init(JSON.parse(cached)); } catch (e) { cached = null; } }
+
+  callApi().then(function (d) {
+    var fresh = JSON.stringify(d);
+    if (fresh === cached) return;
+    remember('appdata', fresh);
+    init(d);
+  }, function (err) {
+    if (app) {
+      status('warn', 'Showing the roster saved on this device; could not refresh it (' + err.message + ').');
+    } else {
+      $('list').innerHTML = '';
+      status('fail', 'Could not load the roster. Check your connection and reload. (' + err.message + ')');
+    }
+  });
+</script>
+</body>
+</html>
