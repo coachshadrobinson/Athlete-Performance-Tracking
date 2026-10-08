@@ -47,7 +47,7 @@
   <div class="grid">
     <div><label for="coach">Coach</label><select id="coach"></select></div>
     <div><label for="group">Time</label><select id="group"></select></div>
-    <div><label for="test">Test</label><select id="test"></select></div>
+    <div><label for="test">Category</label><select id="test"></select></div>
     <div id="detailWrap"><label for="detail" id="detailLabel">Lift</label><select id="detail"></select></div>
     <div><label for="when">When was the session?</label><select id="when"><option value="now">Right now</option><option value="earlier">Earlier (pick date and time)</option></select></div>
     <div></div>
@@ -170,6 +170,8 @@
     if (!coach) { fill($('group'), [], ''); return; }
     var mine = app.groups.filter(function (g) { var o = ownerOf(g); return o === '' || o === coach; });
     if (!mine.length) mine = app.groups;
+    // "All my athletes" sits at the top whenever the coach has slots of their own.
+    if (mine.some(function (g) { return ownerOf(g) === coach; })) mine = [allFor(coach)].concat(mine);
     fill($('group'), mine, keep, function (g) {
       return ownerOf(g) === coach ? g.slice(coach.length + 3) : g;
     });
@@ -187,12 +189,17 @@
     $('submit').disabled = false;
   }
 
+  var ALL = 'All my athletes';
+  function allFor(coach) { return coach + ' - ' + ALL; }
+
   function loadGroup() {
     var g = $('group').value;
+    var coach = $('coach').value;
+    var everyone = g !== '' && g === allFor(coach);
     var kept = {};
     today.forEach(function (a) { kept[a.id] = a.vals; });
     today = app.roster
-      .filter(function (a) { return g !== '' && a.group === g; })
+      .filter(function (a) { return everyone ? (a.group !== '' && ownerOf(a.group) === coach) : (g !== '' && a.group === g); })
       .map(function (a) { return { id: a.id, name: a.name, vals: kept[a.id] || {} }; });
     render();
   }
@@ -292,7 +299,7 @@
     var missing = [];
     if (!$('coach').value) missing.push('coach');
     if (!$('group').value) missing.push('time');
-    if (!t) missing.push('test');
+    if (!t) missing.push('category');
     else if (!$('detail').value) missing.push(t.detailLabel.toLowerCase());
     var when = null;
     if ($('when').value === 'earlier') {
