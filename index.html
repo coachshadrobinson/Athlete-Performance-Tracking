@@ -83,10 +83,10 @@
   var INPUT_FIELDS = {
     'Fly 10 yd time':  [ { k: 'result', label: 'Time s', min: 0.7, max: 2.5 } ],
     'Time':            [ { k: 'result', label: 'Time s', min: 0.5, max: 15 } ],
-    'Splits 10/20':    [ { k: 's10', label: '10 yd', min: 1, max: 4 },
+    'Splits 10/20':    [ { k: 's10', label: '10 yd', min: 1, max: 4, skip: true },
                          { k: 'result', label: '20 yd', min: 2, max: 6 } ],
-    'Splits 10/20/30': [ { k: 's10', label: '10 yd', min: 1, max: 4 },
-                         { k: 's20', label: '20 yd', min: 2, max: 6 },
+    'Splits 10/20/30': [ { k: 's10', label: '10 yd', min: 1, max: 4, skip: true },
+                         { k: 's20', label: '20 yd', min: 2, max: 6, skip: true },
                          { k: 'result', label: '30 yd', min: 3, max: 8 } ],
     'Inches':          [ { k: 'result', label: 'Inches', min: 5, max: 60 } ],
     'Feet & inches':   [ { k: 'ft', label: 'Feet', min: 2, max: 45, whole: true },
@@ -94,7 +94,10 @@
     'Number':          [ { k: 'result', label: '', min: 0, max: Infinity } ],
     'Weight & reps':   [ { k: 'weight', label: 'Weight lb', min: 20, max: 1000 },
                          { k: 'reps', label: 'Reps', min: 1, max: 20, whole: true } ],
-    'Pounds':          [ { k: 'result', label: 'Peak lb', min: 100, max: 1500 } ]
+    'Pounds':          [ { k: 'result', label: 'Peak lb', min: 100, max: 1500 } ],
+    'Peak, time to peak, impulse': [ { k: 'result', label: 'Peak lb', min: 100, max: 1500 },
+                         { k: 'ttp', label: 'To peak s', min: 0.05, max: 5, skip: true },
+                         { k: 'impulse', label: 'Impulse', min: 0, max: Infinity, skip: true } ]
   };
 
   function categories() {
@@ -328,6 +331,7 @@
       var entry = { id: a.id, name: a.name };
       t.fields.forEach(function (f) {
         var raw = a.vals[f.k];
+        if (f.skip && (raw === undefined || raw === '')) return;   // split left blank: fine, just not saved
         if (f.optional && (raw === undefined || raw === '')) raw = '0';
         var v = Number(raw);
         if (raw === undefined || raw === '' || isNaN(v) || v < 0 || (v === 0 && !f.optional) || (f.whole && v % 1 !== 0)) {
@@ -348,7 +352,7 @@
       entries.push(entry);
     });
 
-    if (errors) { status('fail', 'Fix the red boxes: each athlete needs a number in every box (inches can be left blank for 0).'); return; }
+    if (errors) { status('fail', 'Fix the red boxes: each athlete needs a number in every box (inches, dash splits, time to peak and impulse can be left blank).'); return; }
     if (!entries.length) { status('warn', 'Nothing entered yet.'); return; }
 
     var payload = {
