@@ -22,6 +22,7 @@
   .row input { flex: 0 0 78px; width: 78px; padding: 10px 6px; text-align: center; }
   .row input.bad { border-color: #d97706; background: #fff7ed; }
   .row input.err { border-color: #dc2626; background: #fef2f2; }
+  .compact input, .compact span { flex-basis: 62px !important; width: 62px !important; }
   .row button { flex: 0 0 36px; height: 40px; border: 0; background: none; font-size: 20px; color: #888; }
   .heads { display: flex; gap: 6px; font-size: 11px; color: #666; padding-right: 42px; }
   .heads span { flex: 0 0 78px; text-align: center; }
@@ -48,7 +49,7 @@
     <div><label for="coach">Coach</label><select id="coach"></select></div>
     <div><label for="group">Time</label><select id="group"></select></div>
     <div><label for="test">Category</label><select id="test"></select></div>
-    <div id="detailWrap"><label for="detail" id="detailLabel">Lift</label><select id="detail"></select></div>
+    <div id="detailWrap"><label for="detail" id="detailLabel">Test</label><select id="detail"></select></div>
     <div><label for="when">When was the session?</label><select id="when"><option value="now">Right now</option><option value="earlier">Earlier (pick date and time)</option></select></div>
     <div></div>
     <div class="whenBox"><label for="wdate">Session date</label><input id="wdate" type="date"></div>
@@ -77,44 +78,46 @@
   // The web app link from Apps Script (Deploy > Manage deployments). Must end in /exec.
   var API_URL = 'https://script.google.com/macros/s/AKfycbzTyXDJZaKhGlcyrsqeSMhtTEAwvYBnDBwWQbudtjrpVRkum5cvw0nvoiu7ApRlsbCB/exec';
 
-  // Three kinds of test. The second dropdown picks the exact one, and that decides the boxes.
-  var TEST_NAMES = ['Strength', 'Speed', 'Jump'];
-  var PULL = 'Isometric Midthigh Pull';
-  var JUMPS = ['Vertical Jump', 'Broad Jump', 'Triple Jump', 'RSI'];
-  var DETAIL_LABEL = { Strength: 'Exercise', Speed: 'Distance', Jump: 'Jump' };
+  // The tests come from the Tests tab of the sheet: Category, Test, Input.
+  // Input decides which boxes appear. These are the box types the page knows how to draw.
+  var INPUT_FIELDS = {
+    'Fly 10 yd time':  [ { k: 'result', label: 'Time s', min: 0.7, max: 2.5 } ],
+    'Time':            [ { k: 'result', label: 'Time s', min: 0.5, max: 15 } ],
+    'Splits 10/20':    [ { k: 's10', label: '10 yd', min: 1, max: 4 },
+                         { k: 'result', label: '20 yd', min: 2, max: 6 } ],
+    'Splits 10/20/30': [ { k: 's10', label: '10 yd', min: 1, max: 4 },
+                         { k: 's20', label: '20 yd', min: 2, max: 6 },
+                         { k: 'result', label: '30 yd', min: 3, max: 8 } ],
+    'Inches':          [ { k: 'result', label: 'Inches', min: 5, max: 60 } ],
+    'Feet & inches':   [ { k: 'ft', label: 'Feet', min: 2, max: 45, whole: true },
+                         { k: 'inch', label: 'Inches', min: 0, max: 11.9, optional: true } ],
+    'Number':          [ { k: 'result', label: '', min: 0, max: Infinity } ],
+    'Weight & reps':   [ { k: 'weight', label: 'Weight lb', min: 20, max: 1000 },
+                         { k: 'reps', label: 'Reps', min: 1, max: 20, whole: true } ],
+    'Pounds':          [ { k: 'result', label: 'Peak lb', min: 100, max: 1500 } ]
+  };
 
-  function detailsFor(test) {
-    if (test === 'Strength') return app.lifts.filter(function (l) { return l !== PULL; }).concat([PULL]);
-    if (test === 'Speed') return app.sprints;
-    if (test === 'Jump') return JUMPS;
-    return [];
-  }
-
-  function feetInches(minFt, maxFt) {
-    return [
-      { k: 'ft', label: 'Feet', min: minFt, max: maxFt, whole: true },
-      { k: 'inch', label: 'Inches', min: 0, max: 11.9, optional: true } ];
-  }
-
-  function fieldsFor(test, detail) {
-    if (!test || !detail) return [];
-    if (test === 'Strength') {
-      if (detail === PULL) return [ { k: 'result', label: 'Peak lb', min: 100, max: 1500 } ];
-      return [ { k: 'weight', label: 'Weight lb', min: 20, max: 1000 },
-               { k: 'reps', label: 'Reps', min: 1, max: 20, whole: true } ];
-    }
-    if (test === 'Speed') return [ { k: 'result', label: 'Time s', min: 0.5, max: 15 } ];
-    if (detail === 'Vertical Jump') return [ { k: 'result', label: 'Inches', min: 5, max: 50 } ];
-    if (detail === 'Broad Jump') return feetInches(3, 12);
-    if (detail === 'Triple Jump') return feetInches(10, 40);
-    if (detail === 'RSI') return [ { k: 'result', label: 'RSI', min: 0.2, max: 5 } ];
-    return [];
+  function categories() {
+    var seen = {}, out = [];
+    app.tests.forEach(function (t) { if (!seen[t.category]) { seen[t.category] = true; out.push(t.category); } });
+    return out;
   }
 
   function curTest() {
-    var test = $('test').value;
-    if (!test) return null;
-    return { detailLabel: DETAIL_LABEL[test], details: detailsFor(test), fields: fieldsFor(test, $('detail').value) };
+    var cat = $('test').value;
+    if (!cat) return null;
+    var list = app.tests.filter(function (t) { return t.category === cat; });
+    var row = list.filter(function (t) { return t.test === $('detail').value; })[0];
+    var fields = [];
+    if (row && INPUT_FIELDS[row.input]) {
+      fields = INPUT_FIELDS[row.input].map(function (f) {
+        var copy = {}; for (var k in f) copy[k] = f[k];
+        if (!copy.label) copy.label = row.test;           // a "Number" box is labelled with the test name
+        return copy;
+      });
+    }
+    return { detailLabel: 'Test', details: list.map(function (t) { return t.test; }), fields: fields,
+             unknown: !!row && !INPUT_FIELDS[row.input] };
   }
 
   var app = null;      // lists and roster from the sheet
@@ -183,7 +186,11 @@
     var cur = { coach: $('coach').value, group: $('group').value, test: $('test').value, detail: $('detail').value };
     fill($('coach'), app.coaches, cur.coach);
     fillGroups(cur.group);
-    fill($('test'), TEST_NAMES, cur.test);
+    if (!app.tests) {
+      app.tests = [];
+      status('fail', 'The sheet is missing its Tests tab. Update the Apps Script and run setup.');
+    }
+    fill($('test'), categories(), cur.test);
     onTestChange(true, cur.detail);
     loadGroup();
     $('submit').disabled = false;
@@ -220,6 +227,10 @@
 
   function render() {
     var t = curTest() || { fields: [] };
+    if (t.unknown) status('fail', 'This test\'s Input in the Tests tab isn\'t one the page knows. Check the spelling there.');
+    var compact = t.fields.length >= 3;
+    $('heads').classList.toggle('compact', compact);
+    $('list').classList.toggle('compact', compact);
     var heads = $('heads');
     heads.innerHTML = '<span class="sp"></span>';
     t.fields.forEach(function (f) {
@@ -325,6 +336,11 @@
         if (v < f.min || v > f.max) { odd++; mark(i, f.k, 'bad'); }
         entry[f.k] = v;
       });
+      // Cumulative split times have to go up: 10 yd < 20 yd < finish.
+      var seq = ['s10', 's20', 'result'].filter(function (k) { return entry[k] !== undefined; });
+      for (var s = 1; s < seq.length; s++) {
+        if (entry[seq[s]] <= entry[seq[s - 1]]) { odd++; mark(i, seq[s], 'bad'); }
+      }
       if (entry.ft !== undefined) {                     // feet + inches are saved as total inches
         entry.result = Math.round((entry.ft * 12 + (entry.inch || 0)) * 10) / 10;
         delete entry.ft; delete entry.inch;
