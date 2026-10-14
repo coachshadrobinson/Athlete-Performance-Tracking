@@ -31,7 +31,14 @@
   .hit { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 16px; }
   .hit:active { background: #fff9c4; }
   .row { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid #eee; }
-  .row .name { flex: 1 1 auto; font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .who { flex: 1 1 auto; min-width: 0; }
+  .row .name { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .chips { display: flex; gap: 4px; margin-top: 4px; }
+  .row .chips button { flex: 0 0 auto; height: 28px; padding: 0 10px; font-size: 13px; border-radius: 14px; border: 1px solid #b8bcc4; background: #fff; color: #555; }
+  .row .chips button.on { background: #ffe600; border-color: #000; color: #000; font-weight: 600; }
+  .row .chips button.on.off { background: #27272a; border-color: #27272a; color: #fff; }
+  #seasonBar { display: none; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 13px; color: #555; }
+  #seasonBar button { font-size: 14px; padding: 6px 10px; border-radius: 8px; border: 1px solid #b8bcc4; background: #fff; color: #1c1e21; }
   .row input { flex: 0 0 78px; width: 78px; padding: 10px 6px; text-align: center; }
   .row input.bad { border-color: #d97706; background: #fff7ed; }
   .row input.err { border-color: #dc2626; background: #fef2f2; }
@@ -90,6 +97,7 @@
 
 <div class="card">
   <div id="unitSwitch"><span>Enter as</span><button type="button" data-u="time">Time</button><button type="button" data-u="mph">MPH</button></div>
+  <div id="seasonBar"><span>Season</span><button type="button" data-s="In season">All in</button><button type="button" data-s="Off season">All off</button><button type="button" data-s="">Clear</button></div>
   <div class="heads" id="heads"></div>
   <div id="list"><div class="empty">Loading…</div></div>
 </div>
@@ -166,6 +174,9 @@
     today.forEach(function (a) { a.vals = {}; });
     render();
   }
+  Array.prototype.forEach.call(document.querySelectorAll('#seasonBar button'), function (b) {
+    b.addEventListener('click', function () { today.forEach(function (a) { a.season = b.dataset.s; }); render(); });
+  });
   Array.prototype.forEach.call(document.querySelectorAll('#unitSwitch button'), function (b) {
     b.addEventListener('click', function () { if (flyUnit() !== b.dataset.u) setFlyUnit(b.dataset.u); });
   });
@@ -253,11 +264,11 @@
     var g = $('group').value;
     var coach = $('coach').value;
     var everyone = g !== '' && g === allFor(coach);
-    var kept = {};
-    today.forEach(function (a) { kept[a.id] = a.vals; });
+    var kept = {}, keptSeason = {};
+    today.forEach(function (a) { kept[a.id] = a.vals; keptSeason[a.id] = a.season || ''; });
     today = app.roster
       .filter(function (a) { return everyone ? (a.group !== '' && ownerOf(a.group) === coach) : (g !== '' && a.group === g); })
-      .map(function (a) { return { id: a.id, name: a.name, vals: kept[a.id] || {} }; });
+      .map(function (a) { return { id: a.id, name: a.name, vals: kept[a.id] || {}, season: keptSeason[a.id] || '' }; });
     render();
   }
 
@@ -294,6 +305,7 @@
 
     var list = $('list');
     list.innerHTML = '';
+    $('seasonBar').style.display = today.length ? 'flex' : 'none';
     if (!today.length) {
       var e = document.createElement('div');
       e.className = 'empty';
@@ -303,8 +315,20 @@
     }
     today.forEach(function (a, i) {
       var row = document.createElement('div'); row.className = 'row';
+      var who = document.createElement('div'); who.className = 'who';
       var n = document.createElement('div'); n.className = 'name'; n.textContent = a.name;
-      row.appendChild(n);
+      who.appendChild(n);
+      // Season for this athlete today: In, Off, or not marked (tap again to clear).
+      var chips = document.createElement('div'); chips.className = 'chips';
+      [['In season', 'In'], ['Off season', 'Off']].forEach(function (s) {
+        var c = document.createElement('button'); c.type = 'button'; c.textContent = s[1];
+        c.setAttribute('aria-label', a.name + ' ' + s[0]);
+        if (a.season === s[0]) c.className = 'on' + (s[0] === 'Off season' ? ' off' : '');
+        c.addEventListener('click', function () { a.season = (a.season === s[0]) ? '' : s[0]; render(); });
+        chips.appendChild(c);
+      });
+      who.appendChild(chips);
+      row.appendChild(who);
       t.fields.forEach(function (f) {
         var inp = document.createElement('input');
         inp.type = 'text';
@@ -340,7 +364,7 @@
         var d = document.createElement('div'); d.className = 'hit';
         d.textContent = a.name + (a.group ? '  ·  ' + a.group : '');
         d.addEventListener('click', function () {
-          today.push({ id: a.id, name: a.name, vals: {} });
+          today.push({ id: a.id, name: a.name, vals: {}, season: '' });
           $('search').value = ''; box.innerHTML = '';
           render();
         });
@@ -380,7 +404,7 @@
     today.forEach(function (a, i) {
       var filled = t.fields.filter(function (f) { return a.vals[f.k] !== undefined && a.vals[f.k] !== ''; });
       if (!filled.length) return;                       // blank row = absent, skip it
-      var entry = { id: a.id, name: a.name };
+      var entry = { id: a.id, name: a.name, season: a.season || '' };
       t.fields.forEach(function (f) {
         var raw = a.vals[f.k];
         if (f.skip && (raw === undefined || raw === '')) return;   // split left blank: fine, just not saved
@@ -419,7 +443,7 @@
     var snap = {};
     entries.forEach(function (en) {
       var a = today.filter(function (x) { return x.id === en.id; })[0];
-      snap[en.id] = { name: en.name, vals: JSON.parse(JSON.stringify(a ? a.vals : {})) };
+      snap[en.id] = { name: en.name, vals: JSON.parse(JSON.stringify(a ? a.vals : {})), season: a ? a.season || '' : '' };
     });
     payload._snap = snap;
     payload._flyMode = flyUnit();
@@ -532,6 +556,7 @@
       var a = today.filter(function (x) { return x.id === id; })[0];
       if (!a) { a = { id: id, name: sn.name, vals: {} }; today.push(a); }
       a.vals = sn.vals;
+      a.season = sn.season || '';
     });
     render();
   }
