@@ -55,7 +55,7 @@
 
 <div class="card" id="lock" style="display:none">
   <label for="code">Access code</label>
-  <input id="code" type="password" autocomplete="current-password" placeholder="Enter the code your coach lead gave you">
+  <input id="code" type="password" autocomplete="current-password" placeholder="Access code">
   <button id="unlock" type="button">Continue</button>
   <div id="lockMsg" class="lockMsg"></div>
 </div>
@@ -628,7 +628,7 @@
       if (accessCode) {                                 // not a code problem: connection, etc.
         $('unlock').disabled = false;
         $('unlock').textContent = 'Continue';
-        $('lockMsg').textContent = 'Could not check the code (' + err.message + '). Try again.';
+        $('lockMsg').textContent = 'Could not check the access code (' + err.message + '). Try again.';
       }
     });
   }
