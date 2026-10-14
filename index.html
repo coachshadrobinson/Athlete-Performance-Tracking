@@ -13,6 +13,9 @@
   label { display: block; font-size: 12px; color: #555; margin-bottom: 2px; }
   select, input { width: 100%; font-size: 16px; padding: 10px; border: 1px solid #c5c9d0; border-radius: 8px; background: #fff; }
   #results { margin-top: 6px; }
+  #unlock { margin-top: 10px; width: 100%; font-size: 17px; font-weight: 600; padding: 12px; border: 0; border-radius: 10px; background: #2563eb; color: #fff; }
+  .lockMsg { margin-top: 8px; font-size: 14px; color: #991b1b; }
+  body.locked #app, body.locked footer { display: none; }
   .whenBox { display: none; }
   .earlier .whenBox { display: block; }
   .hit { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 16px; }
@@ -44,6 +47,15 @@
 <body>
 <header>Athlete Performance Tracking</header>
 
+<div class="card" id="lock" style="display:none">
+  <label for="code">Access code</label>
+  <input id="code" type="password" autocomplete="current-password" placeholder="Enter the code your coach lead gave you">
+  <button id="unlock" type="button">Continue</button>
+  <div id="lockMsg" class="lockMsg"></div>
+</div>
+
+<div id="app">
+
 <div class="card">
   <div class="grid">
     <div><label for="coach">Coach</label><select id="coach"></select></div>
@@ -66,6 +78,8 @@
 <div class="card">
   <div class="heads" id="heads"></div>
   <div id="list"><div class="empty">Loading…</div></div>
+</div>
+
 </div>
 
 <footer>
@@ -368,11 +382,14 @@
   }
 
   // Talks to the sheet. No body = load the lists; with a body = save results.
+  // Every request goes as a POST carrying the shared access code.
+  var accessCode = recall('code') || '';
   function callApi(body) {
     var ctl = new AbortController();
     var timer = setTimeout(function () { ctl.abort(); }, 30000);
-    var opts = { redirect: 'follow', signal: ctl.signal };
-    if (body) { opts.method = 'POST'; opts.body = JSON.stringify(body); }
+    body = body || { action: 'load' };
+    body.code = accessCode;
+    var opts = { redirect: 'follow', signal: ctl.signal, method: 'POST', body: JSON.stringify(body) };
     return fetch(API_URL, opts).then(function (r) {
       clearTimeout(timer);
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -381,6 +398,7 @@
       clearTimeout(timer);
       throw new Error(e && e.name === 'AbortError' ? 'timed out' : 'no connection');
     }).then(function (d) {
+      if (d && d.error === 'ACCESS') { lockOut(d.message); throw new Error(d.message); }
       if (d && d.error) throw new Error(d.error);
       return d;
     });
@@ -431,23 +449,65 @@
   $('search').addEventListener('input', onSearch);
   $('submit').addEventListener('click', submit);
 
-  // Show the roster saved on this device straight away, then refresh it from the sheet.
-  var cached = recall('appdata');
-  if (cached) { try { init(JSON.parse(cached)); } catch (e) { cached = null; } }
+  // Wrong or changed code: forget it (and the saved roster) and ask again.
+  function lockOut(msg) {
+    accessCode = '';
+    try { localStorage.removeItem('te_code'); localStorage.removeItem('te_appdata'); } catch (e) {}
+    document.body.classList.add('locked');
+    $('lock').style.display = 'block';
+    $('lockMsg').textContent = msg || '';
+    $('unlock').disabled = false;
+    $('unlock').textContent = 'Continue';
+  }
 
-  callApi().then(function (d) {
-    var fresh = JSON.stringify(d);
-    if (fresh === cached) return;
-    remember('appdata', fresh);
-    init(d);
-  }, function (err) {
-    if (app) {
-      status('warn', 'Showing the roster saved on this device; could not refresh it (' + err.message + ').');
-    } else {
-      $('list').innerHTML = '';
-      status('fail', 'Could not load the roster. Check your connection and reload. (' + err.message + ')');
-    }
-  });
+  function unlock() {
+    var c = $('code').value.trim();
+    if (!c) { $('lockMsg').textContent = 'Enter the access code.'; return; }
+    accessCode = c;
+    $('unlock').disabled = true;
+    $('unlock').textContent = 'Checking…';
+    $('lockMsg').textContent = '';
+    callApi().then(function (d) {
+      remember('code', c);
+      remember('appdata', JSON.stringify(d));
+      document.body.classList.remove('locked');
+      $('lock').style.display = 'none';
+      $('code').value = '';
+      status('', '');
+      init(d);
+    }, function (err) {
+      if (accessCode) {                                 // not a code problem: connection, etc.
+        $('unlock').disabled = false;
+        $('unlock').textContent = 'Continue';
+        $('lockMsg').textContent = 'Could not check the code (' + err.message + '). Try again.';
+      }
+    });
+  }
+  $('unlock').addEventListener('click', unlock);
+  $('code').addEventListener('keydown', function (e) { if (e.key === 'Enter') unlock(); });
+
+  if (!accessCode) {
+    lockOut('');
+  } else {
+    // Show the roster saved on this device straight away, then refresh it from the sheet.
+    var cached = recall('appdata');
+    if (cached) { try { init(JSON.parse(cached)); } catch (e) { cached = null; } }
+
+    callApi().then(function (d) {
+      var fresh = JSON.stringify(d);
+      if (fresh === cached) return;
+      remember('appdata', fresh);
+      init(d);
+    }, function (err) {
+      if (!accessCode) return;                          // the code was refused; the code screen is showing
+      if (app) {
+        status('warn', 'Showing the roster saved on this device; could not refresh it (' + err.message + ').');
+      } else {
+        $('list').innerHTML = '';
+        status('fail', 'Could not load the roster. Check your connection and reload. (' + err.message + ')');
+      }
+    });
+  }
 </script>
 </body>
 </html>
