@@ -34,7 +34,10 @@
   footer { position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1px solid #ddd; padding: 10px; }
   #submit { width: 100%; font-size: 18px; font-weight: 600; padding: 14px; border: 0; border-radius: 10px; background: #2563eb; color: #fff; }
   #submit:disabled { background: #9ca3af; }
-  #status { font-size: 14px; margin-bottom: 8px; display: none; padding: 8px 10px; border-radius: 8px; }
+  #status { font-size: 14px; margin-bottom: 8px; display: none; padding: 8px 10px; border-radius: 8px; flex: 1 1 auto; }
+  #statusRow { display: flex; gap: 8px; align-items: flex-start; }
+  #undoBtn { display: none; flex: 0 0 auto; font-size: 15px; font-weight: 600; padding: 8px 14px; border-radius: 8px; border: 1px solid #166534; background: #fff; color: #166534; }
+  #queue { display: none; font-size: 14px; margin-bottom: 8px; padding: 8px 10px; border-radius: 8px; background: #e0e7ff; color: #3730a3; }
   #status.ok { display: block; background: #dcfce7; color: #166534; }
   #status.warn { display: block; background: #fef3c7; color: #92400e; }
   #status.fail { display: block; background: #fee2e2; color: #991b1b; }
@@ -83,7 +86,8 @@
 </div>
 
 <footer>
-  <div id="status"></div>
+  <div id="queue"></div>
+  <div id="statusRow"><div id="status"></div><button id="undoBtn" type="button">Undo</button></div>
   <div id="ask"><div id="askMsg"></div><div class="btns"><button id="askNo">Cancel</button><button id="askYes" class="yes">Save anyway</button></div></div>
   <button id="submit" disabled>Submit</button>
 </footer>
@@ -373,6 +377,13 @@
       coach: $('coach').value, group: $('group').value, test: $('test').value,
       detail: $('detail').value, when: when, entries: entries
     };
+    // What the coach typed, kept so Undo can put it back on screen.
+    var snap = {};
+    entries.forEach(function (en) {
+      var a = today.filter(function (x) { return x.id === en.id; })[0];
+      snap[en.id] = { name: en.name, vals: JSON.parse(JSON.stringify(a ? a.vals : {})) };
+    });
+    payload._snap = snap;
     if (odd) {
       ask(odd + (odd === 1 ? ' value looks' : ' values look') + ' unusual (highlighted). Check for typos.', 'Save anyway',
         function () { send(payload, false); });
@@ -390,18 +401,24 @@
     body = body || { action: 'load' };
     body.code = accessCode;
     var opts = { redirect: 'follow', signal: ctl.signal, method: 'POST', body: JSON.stringify(body) };
+    var netErr = function (msg) { var e = new Error(msg); e.network = true; return e; };
     return fetch(API_URL, opts).then(function (r) {
       clearTimeout(timer);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
+      if (!r.ok) throw netErr('HTTP ' + r.status);
+      return r.json().catch(function () { throw netErr('bad response'); });
     }, function (e) {
       clearTimeout(timer);
-      throw new Error(e && e.name === 'AbortError' ? 'timed out' : 'no connection');
+      throw netErr(e && e.name === 'AbortError' ? 'timed out' : 'no connection');
     }).then(function (d) {
       if (d && d.error === 'ACCESS') { lockOut(d.message); throw new Error(d.message); }
       if (d && d.error) throw new Error(d.error);
       return d;
     });
+  }
+
+  function wire(payload) {                             // what actually goes to the sheet
+    var p = {}; for (var k in payload) if (k !== '_snap') p[k] = payload[k];
+    return p;
   }
 
   function send(payload, force) {
@@ -410,7 +427,7 @@
     $('submit').textContent = 'Saving…';
     var done = function () { busy = false; $('submit').disabled = false; $('submit').textContent = 'Submit'; };
 
-    callApi({ action: 'save', payload: payload, force: !!force }).then(function (res) {
+    callApi({ action: 'save', payload: wire(payload), force: !!force }).then(function (res) {
       done();
       if (res && res.duplicates) {
         var names = res.duplicates.map(function (d) { return d.name + ' (by ' + d.coach + ')'; }).join(', ');
@@ -422,12 +439,111 @@
       render();
       status('ok', res.saved + ' saved ✓  ' + payload.test + (payload.detail ? ' · ' + payload.detail : '') +
         (payload.when ? ' · session ' + payload.when.date + ' ' + payload.when.time : ''));
+      offerUndo(payload, res);
+      flushQueue();
     }, function (err) {
       done();
-      status('fail', 'NOT saved. Your numbers are still here. Check your connection and tap Submit again. (' +
-        (err && err.message ? err.message : 'no response') + ')');
+      if (err && err.network) { holdForLater(payload, force); return; }
+      if (!accessCode) return;                          // code refused; the code screen is showing
+      status('fail', 'NOT saved. Your numbers are still here. (' + (err && err.message ? err.message : 'no response') + ')');
     });
   }
+
+  // ---- Undo the last save (for 10 minutes) ----
+  var lastSave = null, undoTimer = null;
+  function offerUndo(payload, res) {
+    if (!res || !res.entered) return;                   // older script without undo support
+    lastSave = { payload: payload, entered: res.entered, count: res.saved };
+    $('undoBtn').style.display = 'block';
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(clearUndo, 10 * 60 * 1000);
+  }
+  function clearUndo() { lastSave = null; $('undoBtn').style.display = 'none'; }
+
+  $('undoBtn').addEventListener('click', function () {
+    if (!lastSave || busy) return;
+    var s = lastSave;
+    ask('Remove the ' + s.count + ' result(s) you just saved? Your numbers come back on screen so you can fix them.', 'Remove',
+      function () {
+        busy = true; $('undoBtn').disabled = true;
+        callApi({ action: 'undo', undo: { entered: s.entered, test: s.payload.test, detail: s.payload.detail,
+          ids: s.payload.entries.map(function (e) { return e.id; }) } }).then(function (res) {
+          busy = false; $('undoBtn').disabled = false;
+          clearUndo();
+          restore(s.payload);
+          status('warn', 'Removed ' + res.removed + ' result(s). Fix the numbers and tap Submit.');
+        }, function (err) {
+          busy = false; $('undoBtn').disabled = false;
+          if (!accessCode) return;
+          status('fail', 'Could not undo (' + err.message + '). Ask Shad to fix it in the sheet if needed.');
+        });
+      });
+  });
+
+  // Put an undone batch back on screen, on the same test, ready to fix and resubmit.
+  function restore(payload) {
+    if ($('test').value !== payload.test || $('detail').value !== payload.detail) {
+      $('test').value = payload.test; onTestChange(false);
+      $('detail').value = payload.detail;
+      today.forEach(function (a) { a.vals = {}; });
+    }
+    Object.keys(payload._snap || {}).forEach(function (id) {
+      var sn = payload._snap[id];
+      var a = today.filter(function (x) { return x.id === id; })[0];
+      if (!a) { a = { id: id, name: sn.name, vals: {} }; today.push(a); }
+      a.vals = sn.vals;
+    });
+    render();
+  }
+
+  // ---- Holding entries on the phone when there is no signal ----
+  var QKEY = 'te_queue', memQueue = [], flushing = false;
+  function readQueue() { try { return JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch (e) { return memQueue; } }
+  function writeQueue(q) { memQueue = q; try { localStorage.setItem(QKEY, JSON.stringify(q)); } catch (e) {} showQueue(); }
+  function showQueue(note) {
+    var q = readQueue(), el = $('queue');
+    if (!q.length && !note) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    el.textContent = (q.length ? q.length + ' batch(es) saved on this phone, waiting for signal. They send automatically. ' : '') + (note || '');
+  }
+  function localWhen() {
+    var d = new Date(), p = function (n) { return ('0' + n).slice(-2); };
+    return { date: d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()), time: p(d.getHours()) + ':' + p(d.getMinutes()) };
+  }
+  function holdForLater(payload, force) {
+    var p = wire(payload);
+    if (!p.when) p.when = localWhen();                  // keep the real session time, not the time it finally sends
+    var q = readQueue(); q.push({ payload: p, force: !!force }); writeQueue(q);
+    today.forEach(function (a) { a.vals = {}; });
+    render();
+    status('warn', 'No signal. ' + payload.entries.length + ' result(s) kept on this phone and will send automatically.');
+  }
+  function flushQueue() {
+    var q = readQueue();
+    if (flushing || busy || !q.length || !accessCode) { showQueue(); return; }
+    flushing = true;
+    var item = q[0];
+    callApi({ action: 'save', payload: item.payload, force: item.force }).then(function (res) {
+      flushing = false;
+      var rest = readQueue().slice(1); writeQueue(rest);
+      if (res && res.duplicates) {
+        showQueue('Already in the sheet, not sent twice: ' + res.duplicates.map(function (d) { return d.name; }).join(', ') + '.');
+      } else {
+        showQueue('Sent ' + res.saved + ' result(s) that were waiting (' + item.payload.test + ' · ' + item.payload.detail + ').');
+      }
+      if (/could not refresh/.test($('status').textContent)) status('', '');
+      if (rest.length) flushQueue();
+    }, function (err) {
+      flushing = false;
+      if (!err.network && accessCode) showQueue('One waiting batch could not be saved: ' + err.message + '. Tell Shad.');
+      else showQueue();
+    });
+  }
+  window.addEventListener('online', function () {
+    if (/could not refresh/.test($('status').textContent)) status('', '');
+    flushQueue();
+  });
+  setInterval(flushQueue, 30000);
 
   $('coach').addEventListener('change', function () { status('', ''); fillGroups(); loadGroup(); });
   $('group').addEventListener('change', function () { status('', ''); loadGroup(); });
@@ -486,6 +602,7 @@
   $('unlock').addEventListener('click', unlock);
   $('code').addEventListener('keydown', function (e) { if (e.key === 'Enter') unlock(); });
 
+  showQueue();
   if (!accessCode) {
     lockOut('');
   } else {
@@ -495,9 +612,11 @@
 
     callApi().then(function (d) {
       var fresh = JSON.stringify(d);
+      flushQueue();
       if (fresh === cached) return;
       remember('appdata', fresh);
       init(d);
+      flushQueue();
     }, function (err) {
       if (!accessCode) return;                          // the code was refused; the code screen is showing
       if (app) {
