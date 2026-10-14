@@ -13,6 +13,9 @@
   label { display: block; font-size: 12px; color: #555; margin-bottom: 2px; }
   select, input { width: 100%; font-size: 16px; padding: 10px; border: 1px solid #c5c9d0; border-radius: 8px; background: #fff; }
   #results { margin-top: 6px; }
+  #unitSwitch { display: none; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 13px; color: #555; }
+  #unitSwitch button { font-size: 15px; padding: 6px 14px; border-radius: 8px; border: 1px solid #c5c9d0; background: #fff; color: #1c1e21; }
+  #unitSwitch button.on { background: #1f2937; border-color: #1f2937; color: #fff; }
   #unlock { margin-top: 10px; width: 100%; font-size: 17px; font-weight: 600; padding: 12px; border: 0; border-radius: 10px; background: #2563eb; color: #fff; }
   .lockMsg { margin-top: 8px; font-size: 14px; color: #991b1b; }
   body.locked #app, body.locked footer { display: none; }
@@ -79,6 +82,7 @@
 </div>
 
 <div class="card">
+  <div id="unitSwitch"><span>Enter as</span><button type="button" data-u="time">Time</button><button type="button" data-u="mph">MPH</button></div>
   <div class="heads" id="heads"></div>
   <div id="list"><div class="empty">Loading…</div></div>
 </div>
@@ -130,7 +134,10 @@
     var list = app.tests.filter(function (t) { return t.category === cat; });
     var row = list.filter(function (t) { return t.test === $('detail').value; })[0];
     var fields = [];
-    if (row && INPUT_FIELDS[row.input]) {
+    var input = row ? row.input : '';
+    if (input === 'Fly 10 yd time' && flyUnit() === 'mph') {
+      fields = [ { k: 'mph', label: 'MPH', min: 8, max: 25 } ];
+    } else if (row && INPUT_FIELDS[row.input]) {
       fields = INPUT_FIELDS[row.input].map(function (f) {
         var copy = {}; for (var k in f) copy[k] = f[k];
         if (!copy.label) copy.label = row.test;           // a "Number" box is labelled with the test name
@@ -138,8 +145,23 @@
       });
     }
     return { detailLabel: 'Test', details: list.map(function (t) { return t.test; }), fields: fields,
-             unknown: !!row && !INPUT_FIELDS[row.input] };
+             unknown: !!row && !INPUT_FIELDS[row.input], input: input };
   }
+
+  // Fly results can be typed as a time or as MPH; this phone remembers the choice.
+  var flyMode = null;
+  function flyUnit() {
+    if (flyMode === null) flyMode = (recall('flyunit') === 'mph') ? 'mph' : 'time';
+    return flyMode;
+  }
+  function setFlyUnit(u) {
+    flyMode = u; remember('flyunit', u);
+    today.forEach(function (a) { a.vals = {}; });
+    render();
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('#unitSwitch button'), function (b) {
+    b.addEventListener('click', function () { if (flyUnit() !== b.dataset.u) setFlyUnit(b.dataset.u); });
+  });
 
   var app = null;      // lists and roster from the sheet
   var today = [];      // [{id, name, vals: {}}] athletes on screen
@@ -248,6 +270,11 @@
 
   function render() {
     var t = curTest() || { fields: [] };
+    var fly = t.input === 'Fly 10 yd time';
+    $('unitSwitch').style.display = fly ? 'flex' : 'none';
+    Array.prototype.forEach.call(document.querySelectorAll('#unitSwitch button'), function (b) {
+      b.classList.toggle('on', b.dataset.u === flyUnit());
+    });
     if (t.unknown) status('fail', 'This test\'s Input in the Tests tab isn\'t one the page knows. Check the spelling there.');
     var compact = t.fields.length >= 3;
     $('heads').classList.toggle('compact', compact);
@@ -363,6 +390,10 @@
       for (var s = 1; s < seq.length; s++) {
         if (entry[seq[s]] <= entry[seq[s - 1]]) { odd++; mark(i, seq[s], 'bad'); }
       }
+      if (entry.mph !== undefined) {                    // MPH is saved as the 10 yd time it equals
+        entry.result = Math.round(20.455 / entry.mph * 10000) / 10000;
+        delete entry.mph;
+      }
       if (entry.ft !== undefined) {                     // feet + inches are saved as total inches
         entry.result = Math.round((entry.ft * 12 + (entry.inch || 0)) * 10) / 10;
         delete entry.ft; delete entry.inch;
@@ -384,6 +415,7 @@
       snap[en.id] = { name: en.name, vals: JSON.parse(JSON.stringify(a ? a.vals : {})) };
     });
     payload._snap = snap;
+    payload._flyMode = flyUnit();
     if (odd) {
       ask(odd + (odd === 1 ? ' value looks' : ' values look') + ' unusual (highlighted). Check for typos.', 'Save anyway',
         function () { send(payload, false); });
@@ -417,7 +449,7 @@
   }
 
   function wire(payload) {                             // what actually goes to the sheet
-    var p = {}; for (var k in payload) if (k !== '_snap') p[k] = payload[k];
+    var p = {}; for (var k in payload) if (k.charAt(0) !== '_') p[k] = payload[k];
     return p;
   }
 
@@ -482,6 +514,7 @@
 
   // Put an undone batch back on screen, on the same test, ready to fix and resubmit.
   function restore(payload) {
+    if (payload._flyMode) { flyMode = payload._flyMode; remember('flyunit', flyMode); }
     if ($('test').value !== payload.test || $('detail').value !== payload.detail) {
       $('test').value = payload.test; onTestChange(false);
       $('detail').value = payload.detail;
