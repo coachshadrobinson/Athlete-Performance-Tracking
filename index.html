@@ -34,6 +34,8 @@
   .row .who { flex: 1 1 auto; min-width: 0; }
   .row .name { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row .chips { display: flex; gap: 4px; margin-top: 4px; }
+  .row .hint { font-size: 12px; color: #6b7280; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hit.add { color: #1d4ed8; font-weight: 600; }
   .row .chips button { flex: 0 0 auto; height: 28px; padding: 0 10px; font-size: 13px; border-radius: 14px; border: 1px solid #b8bcc4; background: #fff; color: #555; }
   .row .chips button.on { background: #ffe600; border-color: #000; color: #000; font-weight: 600; }
   .row .chips button.on.off { background: #27272a; border-color: #27272a; color: #fff; }
@@ -284,6 +286,44 @@
     }
     if (!first) today.forEach(function (a) { a.vals = {}; });
     render();
+    loadHistory();
+  }
+
+  // ---- Each athlete's history on the chosen test: last, best, usual ----
+  var hist = {};                                        // 'Category|Test' -> { input, lower, athletes: { id: {...} } }
+  var TYPO_LIMIT = { 'Fly 10 yd time': 0.12, 'Time': 0.12, 'Splits 10/20': 0.12, 'Splits 10/20/30': 0.12,
+    'Inches': 0.2, 'Feet & inches': 0.2, 'Number': 0.3, 'Weight & reps': 0.25, 'Pounds': 0.3, 'Peak, time to peak, impulse': 0.3 };
+  function histKey() { return $('test').value + '|' + $('detail').value; }
+  function loadHistory(force) {
+    var key = histKey(), cat = $('test').value, det = $('detail').value;
+    if (!cat || !det || !accessCode || (hist[key] && !force)) return;
+    callApi({ action: 'history', query: { test: cat, detail: det } }).then(function (d) {
+      hist[cat + '|' + det] = d;
+      if (histKey() === cat + '|' + det) render();
+    }, function () { /* no history yet, or an older script: hints just don't show */ });
+  }
+  // How a value reads for this test: times to 2 places, MPH, feet and inches, 1RM, pounds.
+  function show(v, input) {
+    if (v === null || v === undefined || isNaN(v)) return '';
+    if (input === 'Fly 10 yd time' && flyUnit() === 'mph') return (20.455 / v).toFixed(1) + ' mph';
+    if (input === 'Feet & inches') { var ft = Math.floor(v / 12), inch = Math.round((v - ft * 12) * 10) / 10; return ft + "'" + inch + '"'; }
+    if (input === 'Weight & reps') return '1RM ' + Math.round(v);
+    if (input === 'Pounds' || input === 'Peak, time to peak, impulse') return Math.round(v) + ' lb';
+    if (input === 'Inches') return v + '"';
+    if (LOWER_INPUTS.indexOf(input) !== -1) return Number(v).toFixed(2);
+    return String(Math.round(v * 100) / 100);
+  }
+  var LOWER_INPUTS = ['Fly 10 yd time', 'Time', 'Splits 10/20', 'Splits 10/20/30'];
+  function hintFor(id, input) {
+    var hk = hist[histKey()];
+    var h = hk && hk.athletes[id];
+    if (!h) return hk ? 'first result' : '';
+    return 'last ' + show(h.last, input) + (h.n > 1 ? ' · best ' + show(h.best, input) : '');
+  }
+  // The number used to compare an entry with history (time, inches, 1RM, pounds...).
+  function comparable(entry, input) {
+    if (input === 'Weight & reps') return entry.reps === 1 ? entry.weight : Math.round(entry.weight * (1 + entry.reps / 30) * 10) / 10;
+    return entry.result;
   }
 
   function render() {
@@ -318,6 +358,8 @@
       var who = document.createElement('div'); who.className = 'who';
       var n = document.createElement('div'); n.className = 'name'; n.textContent = a.name;
       who.appendChild(n);
+      var hint = hintFor(a.id, t.input);
+      if (hint) { var hd = document.createElement('div'); hd.className = 'hint'; hd.textContent = hint; who.appendChild(hd); }
       // Season for this athlete today: In, Off, or not marked (tap again to clear).
       var chips = document.createElement('div'); chips.className = 'chips';
       [['In season', 'In'], ['Off season', 'Off']].forEach(function (s) {
@@ -333,6 +375,7 @@
         var inp = document.createElement('input');
         inp.type = 'text';
         inp.inputMode = f.whole ? 'numeric' : 'decimal';
+        inp.enterKeyHint = 'next';
         inp.value = a.vals[f.k] === undefined ? '' : a.vals[f.k];
         inp.setAttribute('aria-label', a.name + ' ' + f.label);
         inp.dataset.i = i; inp.dataset.k = f.k;
@@ -370,11 +413,39 @@
         });
         box.appendChild(d);
       });
+    var typed = $('search').value.trim().replace(/\s+/g, ' ');
+    var exact = app.roster.some(function (a) { return a.name.toLowerCase() === typed.toLowerCase(); });
+    if (typed.length >= 3 && !exact) {
+      var add = document.createElement('div'); add.className = 'hit add';
+      add.textContent = '+ Add "' + typed + '" as a new athlete';
+      add.addEventListener('click', function () { addAthlete(typed); });
+      box.appendChild(add);
+    }
     if (!box.children.length) {
       var none = document.createElement('div'); none.className = 'empty';
-      none.textContent = 'No match. New athletes are added in the Roster tab of the sheet.';
+      none.textContent = 'No match. Keep typing the full name to add a new athlete.';
       box.appendChild(none);
     }
+  }
+
+  function addAthlete(name) {
+    ask('Add ' + name + ' to the roster? Check the spelling: this is how their name appears everywhere.', 'Add', function () {
+      if (busy) return;
+      busy = true;
+      callApi({ action: 'addAthlete', name: name }).then(function (res) {
+        busy = false;
+        app.roster.push({ id: res.id, name: res.name, group: '' });
+        app.roster.sort(function (x, y) { return x.name.localeCompare(y.name); });
+        remember('appdata', JSON.stringify(app));
+        today.push({ id: res.id, name: res.name, vals: {}, season: '' });
+        $('search').value = ''; $('results').innerHTML = '';
+        render();
+        status('ok', 'Added ' + res.name + ' to the roster.');
+      }, function (err) {
+        busy = false;
+        if (accessCode) status('fail', 'Could not add them (' + err.message + ').');
+      });
+    });
   }
 
   function mark(i, k, cls) {
@@ -399,7 +470,7 @@
     }
     if (missing.length) { status('warn', 'Still needed: ' + missing.join(', ') + '.'); return; }
     if (when && when.date > localDay()) { status('warn', 'The session date is in the future. Check the date.'); return; }
-    var entries = [], errors = 0, odd = 0;
+    var entries = [], errors = 0, odd = 0, far = [], cmp = {};
 
     today.forEach(function (a, i) {
       var filled = t.fields.filter(function (f) { return a.vals[f.k] !== undefined && a.vals[f.k] !== ''; });
@@ -429,6 +500,17 @@
         entry.result = Math.round((entry.ft * 12 + (entry.inch || 0)) * 10) / 10;
         delete entry.ft; delete entry.inch;
       }
+      // Compare with this athlete's usual on this test (needs 3+ past results).
+      var hk = hist[histKey()], hh = hk && hk.athletes[a.id];
+      var cv = comparable(entry, t.input);
+      if (hh && hh.n >= 3 && hh.typical && cv > 0 && !isNaN(cv)) {
+        var lim = TYPO_LIMIT[t.input] || 0.25;
+        if (Math.abs(cv - hh.typical) / hh.typical > lim) {
+          odd++; far.push(a.name + ' ' + show(cv, t.input) + ' (usual ' + show(hh.typical, t.input) + ')');
+          mark(i, t.fields[0].k, 'bad');
+        }
+      }
+      cmp[a.id] = cv;
       entries.push(entry);
     });
 
@@ -447,8 +529,11 @@
     });
     payload._snap = snap;
     payload._flyMode = flyUnit();
+    payload._cmp = cmp;
+    payload._input = t.input;
     if (odd) {
-      ask(odd + (odd === 1 ? ' value looks' : ' values look') + ' unusual (highlighted). Check for typos.', 'Save anyway',
+      ask((far.length ? 'Far from their usual: ' + far.join(', ') + '. ' : '') +
+        (odd > far.length ? (odd - far.length) + ' other value(s) look unusual. ' : '') + 'Check the highlighted boxes.', 'Save anyway',
         function () { send(payload, false); });
     } else {
       send(payload, false);
@@ -500,8 +585,11 @@
       }
       today.forEach(function (a) { a.vals = {}; });
       render();
+      var prs = notePRs(payload);
+      render();
       status('ok', res.saved + ' saved ✓  ' + payload.test + (payload.detail ? ' · ' + payload.detail : '') +
-        (payload.when ? ' · session ' + payload.when.date + ' ' + payload.when.time : ''));
+        (payload.when ? ' · session ' + payload.when.date + ' ' + payload.when.time : '') +
+        (prs.length ? '  🏆 New best: ' + prs.join(', ') : ''));
       offerUndo(payload, res);
       flushQueue();
     }, function (err) {
@@ -510,6 +598,22 @@
       if (!accessCode) return;                          // code refused; the code screen is showing
       status('fail', 'NOT saved. Your numbers are still here. (' + (err && err.message ? err.message : 'no response') + ')');
     });
+  }
+
+  // New bests in a saved batch; also updates the history on screen so hints stay current.
+  function notePRs(payload) {
+    var hk = hist[payload.test + '|' + payload.detail], out = [];
+    if (!hk || !payload._cmp) return out;
+    var lower = hk.lower;
+    payload.entries.forEach(function (e) {
+      var v = payload._cmp[e.id];
+      if (!(v > 0)) return;
+      var h = hk.athletes[e.id];
+      if (h && (lower ? v < h.best : v > h.best)) out.push(e.name + ' ' + show(v, payload._input) + ' (was ' + show(h.best, payload._input) + ')');
+      if (!h) hk.athletes[e.id] = { last: v, best: v, n: 1, typical: v };
+      else { h.last = v; h.n++; if (lower ? v < h.best : v > h.best) h.best = v; }
+    });
+    return out;
   }
 
   // ---- Undo the last save (for 10 minutes) ----
@@ -534,6 +638,7 @@
           busy = false; $('undoBtn').disabled = false;
           clearUndo();
           restore(s.payload);
+          loadHistory(true);
           status('warn', 'Removed ' + res.removed + ' result(s). Fix the numbers and tap Submit.');
         }, function (err) {
           busy = false; $('undoBtn').disabled = false;
@@ -617,6 +722,15 @@
     status('', '');
     today.forEach(function (a) { a.vals = {}; });
     render();
+    loadHistory();
+  });
+  // The keyboard's Next / Enter key jumps to the next athlete's box.
+  $('list').addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return;
+    e.preventDefault();
+    var all = Array.prototype.slice.call($('list').querySelectorAll('input'));
+    var i = all.indexOf(e.target);
+    if (i > -1 && i < all.length - 1) all[i + 1].focus(); else e.target.blur();
   });
   function localDay() {
     var d = new Date();
