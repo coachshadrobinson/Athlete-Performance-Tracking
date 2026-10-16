@@ -43,6 +43,9 @@
   .row .chips button { flex: 0 0 auto; height: 28px; padding: 0 10px; font-size: 13px; border-radius: 14px; border: 1px solid #b8bcc4; background: #fff; color: #555; }
   .row .chips button.on { background: #ffe600; border-color: #000; color: #000; font-weight: 600; }
   .row .chips button.on.off { background: #27272a; border-color: #27272a; color: #fff; }
+  #timingWrap { visibility: hidden; }
+  #timingWrap.show { visibility: visible; }
+  #timing.need { border: 2px solid #e6b800; background: #fffbea; }
   #seasonBar { display: none; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 13px; color: #555; }
   #seasonBar button { font-size: 14px; padding: 6px 10px; border-radius: 8px; border: 1px solid #b8bcc4; background: #fff; color: #1c1e21; }
   .row input { flex: 0 0 78px; width: 78px; padding: 10px 6px; text-align: center; }
@@ -90,7 +93,7 @@
     <div><label for="test">Category</label><select id="test"></select></div>
     <div id="detailWrap"><label for="detail" id="detailLabel">Test</label><select id="detail"></select></div>
     <div><label for="when">When was the session?</label><select id="when"><option value="now">Right now</option><option value="earlier">Earlier (pick date and time)</option></select></div>
-    <div></div>
+    <div id="timingWrap"><label for="timing">Recorded with</label><select id="timing"></select></div>
     <div class="whenBox"><label for="wdate">Session date</label><input id="wdate" type="date"></div>
     <div class="whenBox"><label for="wtime">Session time</label><input id="wtime" type="time"></div>
   </div>
@@ -111,7 +114,7 @@
 
 </div>
 
-<p class="legal">© 2026 Robinson Performance Consulting LLC. All rights reserved. For use by authorized coaches only. Do not copy, share or redistribute this page, its code or data without permission.</p>
+<p class="legal">© 2026 Robinson Performance Consulting LLC. All rights reserved. For use by authorized coaches only. Do not copy, share or redistribute this page, its code or athlete data without permission.</p>
 
 <footer>
   <div id="queue"></div>
@@ -168,8 +171,10 @@
         return copy;
       });
     }
+    // "Recorded with" choices come from the Tests tab. An older script sends none, so fall back to the defaults.
+    var tchoices = !row ? [] : (row.timing ? row.timing : (TIMED.indexOf(input) !== -1 ? DEFAULT_TIMING : []));
     return { detailLabel: 'Test', details: list.map(function (t) { return t.test; }), fields: fields,
-             unknown: !!row && !INPUT_FIELDS[row.input], input: input };
+             unknown: !!row && !INPUT_FIELDS[row.input], input: input, timing: tchoices };
   }
 
   // Fly results can be typed as a time or as MPH; this phone remembers the choice.
@@ -182,6 +187,26 @@
     flyMode = u; remember('flyunit', u);
     today.forEach(function (a) { a.vals = {}; });
     render();
+  }
+  // Tests with "Recorded with" choices (Tests tab) must say what the result was recorded with.
+  // Nothing is picked when the page opens or the category changes.
+  var TIMED = ['Fly 10 yd time', 'Time', 'Splits 10/20', 'Splits 10/20/30'];
+  var DEFAULT_TIMING = ['OVR', 'Dashr', 'Freelap', 'Hand-timed'];
+  var timing = '';
+  function drawTiming(t) {
+    var choices = (t && t.timing) || [], on = choices.length > 0, sel = $('timing');
+    $('timingWrap').classList.toggle('show', on);
+    if (!on) return;
+    if (timing && choices.indexOf(timing) === -1) timing = '';   // not a choice for this test
+    var opts = [''].concat(choices);
+    if (sel.options.length !== opts.length || Array.prototype.some.call(sel.options, function (o, i) { return o.value !== opts[i]; })) {
+      sel.innerHTML = '';
+      opts.forEach(function (v) {
+        var o = document.createElement('option'); o.value = v; o.textContent = v || 'Pick one'; sel.appendChild(o);
+      });
+    }
+    sel.value = timing;
+    sel.classList.toggle('need', !timing);
   }
   Array.prototype.forEach.call(document.querySelectorAll('#seasonBar button'), function (b) {
     b.addEventListener('click', function () { today.forEach(function (a) { a.season = b.dataset.s; }); render(); });
@@ -336,6 +361,7 @@
   function render() {
     var t = curTest() || { fields: [] };
     var fly = t.input === 'Fly 10 yd time';
+    drawTiming(t);
     $('unitSwitch').style.display = fly ? 'flex' : 'none';
     Array.prototype.forEach.call(document.querySelectorAll('#unitSwitch button'), function (b) {
       b.classList.toggle('on', b.dataset.u === flyUnit());
@@ -475,6 +501,8 @@
       if (!$('wtime').value) missing.push('session time');
       when = { date: $('wdate').value, time: $('wtime').value.slice(0, 5) };
     }
+    var timed = !!t && t.timing.length > 0;
+    if (timed && !timing) missing.push('Recorded with');
     if (missing.length) { status('warn', 'Still needed: ' + missing.join(', ') + '.'); return; }
     if (when && when.date > localDay()) { status('warn', 'The session date is in the future. Check the date.'); return; }
     var entries = [], errors = 0, odd = 0, far = [], cmp = {};
@@ -526,7 +554,7 @@
 
     var payload = {
       coach: $('coach').value, group: $('group').value, test: $('test').value,
-      detail: $('detail').value, when: when, entries: entries
+      detail: $('detail').value, when: when, timing: timed ? timing : '', entries: entries
     };
     // What the coach typed, kept so Undo can put it back on screen.
     var snap = {};
@@ -663,6 +691,7 @@
       $('detail').value = payload.detail;
       today.forEach(function (a) { a.vals = {}; });
     }
+    if (payload.timing) timing = payload.timing;
     Object.keys(payload._snap || {}).forEach(function (id) {
       var sn = payload._snap[id];
       var a = today.filter(function (x) { return x.id === id; })[0];
@@ -724,7 +753,8 @@
 
   $('coach').addEventListener('change', function () { status('', ''); fillGroups(); loadGroup(); });
   $('group').addEventListener('change', function () { status('', ''); loadGroup(); });
-  $('test').addEventListener('change', function () { status('', ''); onTestChange(false); });
+  $('test').addEventListener('change', function () { status('', ''); timing = ''; onTestChange(false); });
+  $('timing').addEventListener('change', function () { timing = this.value; status('', ''); drawTiming(curTest()); });
   $('detail').addEventListener('change', function () {
     status('', '');
     today.forEach(function (a) { a.vals = {}; });
